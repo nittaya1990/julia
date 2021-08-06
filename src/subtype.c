@@ -62,7 +62,7 @@ typedef struct jl_varbinding_t {
     int8_t concrete;    // 1 if another variable has a constraint forcing this one to be concrete
     // constraintkind: in covariant position, we try three different ways to compute var ∩ type:
     // let ub = var.ub ∩ type
-    // 0 - var.ub <: type ? (var.ub = ub; return var) : ub
+    // 0 - var.ub <: type ? var : ub
     // 1 - var.ub = ub; return var
     // 2 - either (var.ub = ub; return var), or return ub
     int8_t constraintkind;
@@ -2289,7 +2289,6 @@ static jl_value_t *intersect_var(jl_tvar_t *b, jl_value_t *a, jl_stenv_t *e, int
     if (bb->constraintkind == 0) {
         JL_GC_PUSH1(&ub);
         if (!jl_is_typevar(a) && try_subtype_in_env(bb->ub, a, e, 0, d)) {
-            set_bound(&bb->ub, ub, b, e);
             JL_GC_POP();
             return (jl_value_t*)b;
         }
@@ -2352,7 +2351,7 @@ static int var_occurs_inside(jl_value_t *v, jl_tvar_t *var, int inside, int want
 }
 
 // Caller might not have rooted `res`
-static jl_value_t *finish_unionall(jl_value_t *res JL_MAYBE_UNROOTED, jl_varbinding_t *vb, jl_stenv_t *e)
+static jl_value_t *finish_unionall(jl_value_t *res JL_MAYBE_UNROOTED, jl_varbinding_t *vb, jl_unionall_t *u, jl_stenv_t *e)
 {
     jl_value_t *varval = NULL;
     jl_tvar_t *newvar = vb->var;
@@ -2365,7 +2364,10 @@ static jl_value_t *finish_unionall(jl_value_t *res JL_MAYBE_UNROOTED, jl_varbind
         // given x<:T<:x, substitute x for T
         varval = vb->ub;
     }
-    else if (!vb->occurs_inv && is_leaf_bound(vb->ub)) {
+    // TODO: `vb.occurs_cov == 1` here allows substituting Tuple{<:X} => Tuple{X},
+    // which is valid but changes some ambiguity errors so we don't need to do it yet.
+    else if ((/*vb->occurs_cov == 1 || */is_leaf_bound(vb->ub)) &&
+             !var_occurs_invariant(u->body, u->var, 0)) {
         // replace T<:x with x in covariant position when possible
         varval = vb->ub;
     }
@@ -2385,7 +2387,7 @@ static jl_value_t *finish_unionall(jl_value_t *res JL_MAYBE_UNROOTED, jl_varbind
 
     // prefer generating a fresh typevar, to avoid repeated renaming if the result
     // is compared to one of the intersected types later.
-    if (!varval)
+    if (!varval && (vb->lb != vb->var->lb || vb->ub != vb->var->ub))
         newvar = jl_new_typevar(vb->var->name, vb->lb, vb->ub);
 
     // remove/replace/rewrap free occurrences of this var in the environment
@@ -2503,7 +2505,7 @@ static jl_value_t *intersect_unionall_(jl_value_t *t, jl_unionall_t *u, jl_stenv
     int envsize = 0;
     while (btemp != NULL) {
         envsize++;
-        if (envsize > 150)
+        if (envsize > 70)
             return t;
         if (btemp->var == u->var || btemp->lb == (jl_value_t*)u->var ||
             btemp->ub == (jl_value_t*)u->var) {
@@ -2554,7 +2556,7 @@ static jl_value_t *intersect_unionall_(jl_value_t *t, jl_unionall_t *u, jl_stenv
     }
     if (res != jl_bottom_type)
         // res is rooted by callee
-        res = finish_unionall(res, vb, e);
+        res = finish_unionall(res, vb, u, e);
     JL_GC_POP();
     return res;
 }
@@ -2972,14 +2974,13 @@ static jl_value_t *intersect(jl_value_t *x, jl_value_t *y, jl_stenv_t *e, int pa
                 jl_value_t *ub=NULL, *lb=NULL;
                 JL_GC_PUSH2(&lb, &ub);
                 ub = intersect_aside(xub, yub, e, 0, xx ? xx->depth0 : 0);
-                if (xlb == y)
+                if (reachable_var(xlb, (jl_tvar_t*)y, e))
                     lb = ylb;
                 else
                     lb = simple_join(xlb, ylb);
                 if (yy) {
-                    if (!subtype_by_bounds(lb, y, e))
-                        yy->lb = lb;
-                    if (!subtype_by_bounds(y, ub, e))
+                    yy->lb = lb;
+                    if (!reachable_var(ub, (jl_tvar_t*)y, e))
                         yy->ub = ub;
                     assert(yy->ub != y);
                     assert(yy->lb != y);

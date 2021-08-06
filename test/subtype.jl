@@ -1032,7 +1032,10 @@ function test_intersection()
                    Bottom)
     @testintersect(Tuple{Type{Z},Z} where Z,
                    Tuple{Type{Ref{T}} where T, Ref{Float64}},
-                   Tuple{Type{Ref{Float64}}, Ref{Float64}})
+                   !Bottom)
+    @test_broken typeintersect(Tuple{Type{Z},Z} where Z,
+                               Tuple{Type{Ref{T}} where T, Ref{Float64}}) ==
+        Tuple{Type{Ref{Float64}},Ref{Float64}}
 
     # issue #32607
     @testintersect(Type{<:Tuple{Integer,Integer}},
@@ -1801,7 +1804,7 @@ let X1 = Tuple{AlmostLU, Vector{T}} where T,
     # TODO: the quality of this intersection is not great; for now just test that it
     # doesn't stack overflow
     @test I<:X1 || I<:X2
-    actual = Tuple{AlmostLU{S, X} where X<:Matrix{S}, Vector{S}} where S<:Union{Float32, Float64}
+    actual = Tuple{Union{AlmostLU{S, X} where X<:Matrix{S}, AlmostLU{S, <:Matrix}}, Vector{S}} where S<:Union{Float32, Float64}
     @test I == actual
 end
 
@@ -1903,8 +1906,8 @@ end
 # issue #39948
 let A = Tuple{Array{Pair{T, JT} where JT<:Ref{T}, 1} where T, Vector},
     I = typeintersect(A, Tuple{Vararg{Vector{T}}} where T)
-    @test_broken I <: A
-    @test_broken !Base.has_free_typevars(I)
+    @test I <: A
+    @test !Base.has_free_typevars(I)
 end
 
 # issue #8915
@@ -1938,3 +1941,14 @@ let A = Tuple{Dict{I,T}, I, T} where T where I,
     # TODO: we should probably have I == T here
     @test typeintersect(A, B) == Tuple{Dict{I,T}, I, T} where {I, T}
 end
+
+let A = Tuple{UnionAll, Vector{Any}},
+    B = Tuple{Type{T}, T} where T<:AbstractArray,
+    I = typeintersect(A, B)
+    @test !isconcretetype(I)
+    @test_broken I == Tuple{Type{T}, Vector{Any}} where T<:AbstractArray
+end
+
+@testintersect(Tuple{Type{Vector{<:T}}, T} where {T<:Integer},
+               Tuple{Type{T}, AbstractArray} where T<:Array,
+               Bottom)
