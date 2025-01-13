@@ -48,6 +48,13 @@
                 (any (lambda (y) (expr-contains-p p y filt))
                      (cdr expr))))))
 
+(define (expr-replace p expr repl)
+  (cond ((p expr) (repl expr))
+        ((and (pair? expr) (not (quoted? expr)))
+         (cons (car expr)
+               (map (lambda (x) (expr-replace p x repl)) (cdr expr))))
+        (else expr)))
+
 ;; find all subexprs satisfying `p`, applying `key` to each one
 (define (expr-find-all p expr key (filt (lambda (x) #t)))
   (if (filt expr)
@@ -104,3 +111,11 @@
           (begin (put! tbl (car xs) i)
                  (loop (cdr xs) (+ i 1)))))
     tbl))
+
+;; keep at most the first element matching a given predicate
+(define (keep-first pred lst)
+  (cond ((null? lst) lst)
+        ((pred (car lst))
+         (cons (car lst) (filter (lambda (x) (not (pred x))) (cdr lst))))
+        (else
+         (cons (car lst) (keep-first pred (cdr lst))))))
